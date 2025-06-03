@@ -90,7 +90,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		Body:        tmpFile,
 		ContentType: &mediaType,
 	}
-	cfg.s3Client.PutObject(context.Background(), putInput)
+	_, err = cfg.s3Client.PutObject(context.Background(), putInput)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error returning to the start of the temporary file", err)
 		return
