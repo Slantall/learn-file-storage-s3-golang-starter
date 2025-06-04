@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -62,14 +65,14 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusBadRequest, "Invalid file type", nil)
 		return
 	}
-
-	tmpFile, err := os.CreateTemp("", "temp-tubely-upload.mp4")
+	tempPath := "temp-tubely-upload.mp4"
+	tmpFile, err := os.CreateTemp("", tempPath)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Could not create temporary file", nil)
 		return
 	}
 
-	defer os.Remove("temp-tubely-upload.mp4")
+	defer os.Remove(tempPath)
 	defer tmpFile.Close()
 
 	_, err = io.Copy(tmpFile, file)
@@ -84,9 +87,17 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	assetPath := getAssetPath(mediaType)
+
+	ratio, err := getVideoAspectRatio(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error determining the ratio of the temporary file", err)
+		return
+	}
+	fullPath := fmt.Sprintf("%s/%s", ratio, assetPath)
+
 	putInput := &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
-		Key:         &assetPath,
+		Key:         &fullPath,
 		Body:        tmpFile,
 		ContentType: &mediaType,
 	}
@@ -96,7 +107,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	url := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, assetPath)
+	url := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, fullPath)
 	fmt.Println(url)
 
 	video.VideoURL = &url
@@ -106,5 +117,36 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	//respondWithJSON(w, http.StatusOK, video)
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	probe := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	var probeOut bytes.Buffer
+	probe.Stdout = &probeOut
+	probe.Run()
+
+	type Streams struct {
+		Width  int `json:"width"`
+		Height int `json:"height"`
+	}
+
+	type ProbeJSON struct {
+		Streams []Streams `json:"streams"`
+	}
+
+	var probeJSON ProbeJSON
+	if err := json.Unmarshal(probeOut.Bytes(), &probeJSON); err != nil {
+		return "", err
+	}
+	if len(probeJSON.Streams) == 0 {
+		return "", fmt.Errorf("ffprobe returned an empty stream")
+	}
+	ratio := float64(probeJSON.Streams[0].Width) / float64(probeJSON.Streams[0].Height)
+	if ratio < 1.79 && ratio > 1.76 {
+		return "landscape", nil
+	}
+	if ratio < 0.57 && ratio > 0.56 {
+		return "portrait", nil
+	}
+	return "other", nil
 }
