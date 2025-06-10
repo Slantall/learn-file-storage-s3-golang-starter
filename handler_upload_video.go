@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -110,22 +111,29 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	fullPath := fmt.Sprintf("%s/%s", ratio, assetPath)
 
 	putInput := &s3.PutObjectInput{
-		Bucket:      &cfg.s3Bucket,
-		Key:         &fullPath,
+		Bucket:      aws.String(cfg.s3Bucket),
+		Key:         aws.String(fullPath),
 		Body:        processedFile,
-		ContentType: &mediaType,
+		ContentType: aws.String(mediaType),
 	}
+
+	bucketKey := fmt.Sprintf("%s,%s", cfg.s3Bucket, fullPath)
+
 	_, err = cfg.s3Client.PutObject(context.Background(), putInput)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error returning to the start of the temporary file", err)
 		return
 	}
 
-	url := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, fullPath)
-	fmt.Println(url)
+	video.VideoURL = &bucketKey
 
-	video.VideoURL = &url
-	err = cfg.db.UpdateVideo(video)
+	signedVideo, err := cfg.dbVideoToSignedVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error returning signed video", err)
+		return
+	}
+
+	err = cfg.db.UpdateVideo(signedVideo)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
