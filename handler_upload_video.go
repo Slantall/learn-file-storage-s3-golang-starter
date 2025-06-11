@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -111,34 +109,27 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	fullPath := fmt.Sprintf("%s/%s", ratio, assetPath)
 
 	putInput := &s3.PutObjectInput{
-		Bucket:      aws.String(cfg.s3Bucket),
-		Key:         aws.String(fullPath),
+		Bucket:      &cfg.s3Bucket,
+		Key:         &fullPath,
 		Body:        processedFile,
-		ContentType: aws.String(mediaType),
+		ContentType: &mediaType,
 	}
 
-	bucketKey := fmt.Sprintf("%s,%s", cfg.s3Bucket, fullPath)
-
-	_, err = cfg.s3Client.PutObject(context.Background(), putInput)
+	_, err = cfg.s3Client.PutObject(r.Context(), putInput)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error returning to the start of the temporary file", err)
+		respondWithError(w, http.StatusInternalServerError, "Error adding object to bucket", err)
 		return
 	}
+	fmt.Println(fullPath)
+	url := fmt.Sprintf("https://%s/%s", cfg.s3CfDistribution, fullPath)
+	video.VideoURL = &url
 
-	video.VideoURL = &bucketKey
-
-	signedVideo, err := cfg.dbVideoToSignedVideo(video)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error returning signed video", err)
-		return
-	}
-
-	err = cfg.db.UpdateVideo(signedVideo)
+	err = cfg.db.UpdateVideo(video)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
 	}
-
+	respondWithJSON(w, http.StatusOK, video)
 }
 
 func getVideoAspectRatio(filePath string) (string, error) {
